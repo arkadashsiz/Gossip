@@ -11,25 +11,34 @@ void membership_init(membership_t *m, int limit) {
 }
 
 int membership_add(membership_t *m, struct sockaddr_in addr) {
+
     pthread_mutex_lock(&m->lock);
-    // Check if exists
+
     for (int i = 0; i < m->count; i++) {
-        if (m->list[i].addr.sin_port == addr.sin_port && 
+
+        if (m->list[i].addr.sin_port == addr.sin_port &&
             m->list[i].addr.sin_addr.s_addr == addr.sin_addr.s_addr) {
+
+            m->list[i].last_seen = current_time_ms();
             pthread_mutex_unlock(&m->lock);
             return 0;
         }
     }
-    // Add new if limit not reached
+
     if (m->count < m->limit) {
+
         m->list[m->count].addr = addr;
+        m->list[m->count].last_seen = current_time_ms();
         m->count++;
+
         pthread_mutex_unlock(&m->lock);
         return 1;
     }
+
     pthread_mutex_unlock(&m->lock);
     return -1;
 }
+
 
 int membership_get_random(membership_t *m, struct sockaddr_in *targets, int count, struct sockaddr_in *exclude) {
     pthread_mutex_lock(&m->lock);

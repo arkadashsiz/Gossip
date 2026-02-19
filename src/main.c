@@ -3,14 +3,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-#include <unistd.h> // Required for close()
+#include <unistd.h>
+#include <time.h>
 
 void print_usage() {
     printf("Usage: ./gossip_node -p <port> [-f <fanout>] [-t <ttl>] [-b <ip:port>]\n");
 }
 
 int main(int argc, char *argv[]) {
+
     node_t node = {0};
+
     int port = 0, fanout = 3, ttl = 5, peer_limit = 20;
     char boot_ip[64] = {0};
     int boot_port = 0;
@@ -21,14 +24,19 @@ int main(int argc, char *argv[]) {
             case 'p': port = atoi(optarg); break;
             case 'f': fanout = atoi(optarg); break;
             case 't': ttl = atoi(optarg); break;
-            case 'b': 
+            case 'b':
                 sscanf(optarg, "%[^:]:%d", boot_ip, &boot_port);
                 break;
-            default: print_usage(); return 1;
+            default:
+                print_usage();
+                return 1;
         }
     }
 
-    if (port == 0) { print_usage(); return 1; }
+    if (port == 0) {
+        print_usage();
+        return 1;
+    }
 
     if (node_init(&node, port, fanout, ttl, peer_limit) != 0) {
         fprintf(stderr, "Failed to init node\n");
@@ -39,19 +47,38 @@ int main(int argc, char *argv[]) {
         node_bootstrap(&node, boot_ip, boot_port);
     }
 
-    node_run(&node); // Starts the listener thread
+    node_run(&node);
 
-    printf("Gossip Node started on port %d. Type 'msg <text>' to gossip.\n", port);
+    printf("Gossip Node started on port %d\n", port);
+    printf("> ");
+
     char input[MSG_BUF_SIZE];
-    while(fgets(input, MSG_BUF_SIZE, stdin)) {
-        if(strncmp(input, "msg ", 4) == 0) {
+
+    while (fgets(input, MSG_BUF_SIZE, stdin)) {
+
+        if (strncmp(input, "msg ", 4) == 0) {
+
             gossip_msg_t m;
-            // Create a unique ID: port_timestamp
-            snprintf(m.msg_id, ID_LEN, "%d_%ld", port, (long)time(NULL));
+
+            m.version = 1;
+
+            snprintf(m.msg_id, ID_LEN, "%s_%llu",
+                     node.node_id,
+                     (unsigned long long)current_time_ms());
+
+            strcpy(m.msg_type, "GOSSIP");
+
+            strcpy(m.sender_id, node.node_id);
+            strcpy(m.sender_addr, node.self_addr);
+
+            m.timestamp_ms = current_time_ms();
             m.ttl = node.ttl;
-            strncpy(m.payload, input + 4, MSG_BUF_SIZE);
-            
-            // Add to our own seen set so we don't process it again
+
+            snprintf(m.payload, MSG_BUF_SIZE,
+                     "{ \"topic\": \"news\", \"data\": \"%s\" }",
+                     input + 4);
+
+            // Add to seen set
             pthread_mutex_lock(&node.lock);
             strcpy(node.seen_ids[node.seen_count % MAX_SEEN_MSGS], m.msg_id);
             node.seen_count++;
@@ -59,6 +86,7 @@ int main(int argc, char *argv[]) {
 
             relay_gossip(&node, &m, NULL);
         }
+
         printf("> ");
     }
 
