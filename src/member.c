@@ -7,7 +7,6 @@ void membership_init(membership_t *m, int limit) {
     m->count = 0;
     m->limit = (limit > MAX_PEERS) ? MAX_PEERS : limit;
     pthread_mutex_init(&m->lock, NULL);
-    srand(time(NULL));
 }
 
 int membership_add(membership_t *m, struct sockaddr_in addr) {

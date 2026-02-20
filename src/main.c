@@ -6,6 +6,19 @@
 #include <unistd.h>
 #include <time.h>
 
+static struct option long_options[] = {
+    {"port", required_argument, 0, 'p'},
+    {"fanout", required_argument, 0, 'f'},
+    {"ttl", required_argument, 0, 't'},
+    {"bootstrap", required_argument, 0, 'b'},
+    {"peer-limit", required_argument, 0, 'l'},
+    {"ping-interval", required_argument, 0, 'i'},
+    {"peer-timeout", required_argument, 0, 'o'},
+    {"seed", required_argument, 0, 's'},
+    {0, 0, 0, 0}
+};
+
+
 void print_usage() {
     printf("Usage: ./gossip_node -p <port> [-f <fanout>] [-t <ttl>] [-b <ip:port>]\n");
 }
@@ -17,9 +30,13 @@ int main(int argc, char *argv[]) {
     int port = 0, fanout = 3, ttl = 5, peer_limit = 20;
     char boot_ip[64] = {0};
     int boot_port = 0;
-
+    int ping_interval = 2;
+    int peer_timeout = 6;
+    unsigned int seed = 42;
     int opt;
-    while ((opt = getopt(argc, argv, "p:f:t:b:")) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:f:t:b:l:i:o:s:",
+                              long_options, NULL)) != -1) {
+
         switch (opt) {
             case 'p': port = atoi(optarg); break;
             case 'f': fanout = atoi(optarg); break;
@@ -27,6 +44,10 @@ int main(int argc, char *argv[]) {
             case 'b':
                 sscanf(optarg, "%[^:]:%d", boot_ip, &boot_port);
                 break;
+            case 'l': peer_limit = atoi(optarg); break;
+            case 'i': ping_interval = atoi(optarg); break;
+            case 'o': peer_timeout = atoi(optarg); break;
+            case 's': seed = (unsigned int)atoi(optarg); break;
             default:
                 print_usage();
                 return 1;
@@ -38,7 +59,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (node_init(&node, port, fanout, ttl, peer_limit) != 0) {
+    if (node_init(&node,
+              port,
+              fanout,
+              ttl,
+              peer_limit,
+              ping_interval,
+              peer_timeout,
+              seed) != 0)
+ {
         fprintf(stderr, "Failed to init node\n");
         return 1;
     }

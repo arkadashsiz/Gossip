@@ -7,8 +7,13 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-int node_init(node_t *node, int port, int fanout, int ttl, int peer_limit) {
+int node_init(node_t *node,
+              int port, int fanout,
+              int ttl, int peer_limit, int ping_interval, int peer_timeout, unsigned int seed) {
 
+
+
+    srand(seed);
     uuid_t uuid;
     uuid_generate(uuid);
     uuid_unparse(uuid, node->node_id);
@@ -17,8 +22,9 @@ int node_init(node_t *node, int port, int fanout, int ttl, int peer_limit) {
     node->port = port;
     node->fanout = fanout;
     node->ttl = ttl;
-    node->running = 1;
-    node->seen_count = 0;
+    node->ping_interval = ping_interval;
+    node->peer_timeout = peer_timeout;
+    node->seed = seed;
     pthread_mutex_init(&node->lock, NULL);
 
     membership_init(&node->membership, peer_limit);

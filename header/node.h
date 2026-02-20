@@ -44,7 +44,9 @@ typedef struct {
     int fanout;
     int ttl;
     int running;
-
+    int ping_interval;   // seconds
+    int peer_timeout;    // seconds
+    unsigned int seed;
     int sockfd;
 
     membership_t membership;
@@ -57,7 +59,9 @@ typedef struct {
 } node_t;
 
 // Core Node Functions
-int  node_init(node_t *node, int port, int fanout, int ttl, int peer_limit);
+int node_init(node_t *node,
+              int port, int fanout,
+              int ttl, int peer_limit, int ping_interval, int peer_timeout, unsigned int seed);
 void node_run(node_t *node);
 void node_bootstrap(node_t *node, const char *boot_ip, int boot_port);
 void node_cleanup(node_t *node);
