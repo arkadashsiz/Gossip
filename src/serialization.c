@@ -1,6 +1,7 @@
 #include "serialization.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 int serialize_message(const gossip_msg_t *msg, char *buffer, size_t buf_size) {
     return snprintf(buffer, buf_size,
@@ -43,7 +44,7 @@ int deserialize_message(const char *buffer, gossip_msg_t *msg) {
         msg->msg_type,
         msg->sender_id,
         msg->sender_addr,
-        &msg->timestamp_ms,
+        (unsigned long long *)&msg->timestamp_ms,
         &msg->ttl,
         msg->payload
     );

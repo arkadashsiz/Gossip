@@ -1,4 +1,6 @@
 #include "node.h"
+#include "utils.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <uuid/uuid.h>
@@ -41,12 +43,6 @@ int node_init(node_t *node,
     if (bind(node->sockfd, (struct sockaddr*)&serv, sizeof(serv)) < 0) return -1;
 
     return 0;
-}
-
-uint64_t current_time_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
 }
 
 

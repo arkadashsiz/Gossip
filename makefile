@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Iheader
-LDFLAGS = -pthread
+CFLAGS = -Wall -Iheader 
+LDFLAGS = -pthread -luuid
 SRC_DIR = src
 OBJ_DIR = obj
 SRCS = $(wildcard $(SRC_DIR)/*.c)
