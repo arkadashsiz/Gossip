@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <netinet/in.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "member.h"
 #include "message.h"
 #include "serialization.h"
@@ -35,6 +36,14 @@ typedef struct {
     pthread_mutex_t lock;
     pthread_t listener_thread;
     pthread_t ping_thread;
+
+
+    //coklarin hikayatdi
+    FILE *log_file;
+    uint64_t sent_messages;
+
+
+
 } node_t;
 
 // Core Node Functions
@@ -57,5 +66,8 @@ void* ping_thread_func(void* arg);
 void handle_ping(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
 void handle_pong(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
 void membership_remove_expired(node_t *node);
-
+void log_event(node_t *node,
+               const char *event,
+               const char *msg_type,
+               const char *msg_id);
 #endif

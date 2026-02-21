@@ -27,6 +27,17 @@ int node_init(node_t *node,
     node->ping_interval = ping_interval;
     node->peer_timeout = peer_timeout;
     node->seed = seed;
+    char log_name[64];
+    snprintf(log_name, sizeof(log_name), "node_%d.log", port);
+
+    node->log_file = fopen(log_name, "w");
+    if (!node->log_file) {
+        perror("log file");
+        return -1;
+    }
+
+    node->sent_messages = 0;
+
     pthread_mutex_init(&node->lock, NULL);
 
     membership_init(&node->membership, peer_limit);
@@ -89,6 +100,8 @@ void node_bootstrap(node_t *node, const char *boot_ip, int boot_port) {
            0,
            (struct sockaddr*)&boot_addr,
            sizeof(boot_addr));
+    node->sent_messages++;
+    log_event(node, "SEND", hello.msg_type, hello.msg_id);
     gossip_msg_t get;
 
     get.version = 1;
@@ -115,6 +128,9 @@ void node_bootstrap(node_t *node, const char *boot_ip, int boot_port) {
            0,
            (struct sockaddr*)&boot_addr,
            sizeof(boot_addr));
+           node->sent_messages++;
+log_event(node, "SEND", get.msg_type, get.msg_id);
+
     
 }
 
@@ -134,6 +150,8 @@ void relay_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *exclude) 
     for (int i = 0; i < count; i++) {
         sendto(node->sockfd, wire_buffer, strlen(wire_buffer), 0, 
                (struct sockaddr*)&targets[i], sizeof(struct sockaddr_in));
+        node->sent_messages++;
+    log_event(node, "SEND", relay_copy.msg_type, relay_copy.msg_id);
     }
 }
 
@@ -268,6 +286,9 @@ void handle_get_peers(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sende
            0,
            (struct sockaddr*)sender,
            sizeof(struct sockaddr_in));
+           node->sent_messages++;
+log_event(node, "SEND", reply.msg_type, reply.msg_id);
+
 }
 
 
@@ -322,6 +343,7 @@ void handle_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender) 
                msg->msg_id);
 
         node->seen_count++;
+        log_event(node, "RECEIVE", msg->msg_type, msg->msg_id);
 
         pthread_mutex_unlock(&node->lock);
 
@@ -340,6 +362,7 @@ void node_cleanup(node_t *node) {
     pthread_join(node->listener_thread, NULL);
     pthread_join(node->ping_thread, NULL);
     pthread_mutex_destroy(&node->lock);
+    fclose(node->log_file);
 }
 
 
@@ -386,6 +409,9 @@ void* ping_thread_func(void* arg) {
                    0,
                    (struct sockaddr*)&targets[i],
                    sizeof(struct sockaddr_in));
+                   
+node->sent_messages++;
+log_event(node, "SEND", ping.msg_type, ping.msg_id);
         }
 
         membership_remove_expired(node);
@@ -454,6 +480,9 @@ void handle_ping(node_t *node,
            0,
            (struct sockaddr*)sender,
            sizeof(struct sockaddr_in));
+           node->sent_messages++;
+log_event(node, "SEND", pong.msg_type, pong.msg_id);
+
 }
 
 
@@ -462,4 +491,22 @@ void handle_pong(node_t *node,
                  struct sockaddr_in *sender) {
 
     membership_add(&node->membership, *sender);
+}
+
+
+void log_event(node_t *node,
+               const char *event,
+               const char *msg_type,
+               const char *msg_id) {
+
+    uint64_t now = current_time_ms();
+
+    fprintf(node->log_file,
+            "%llu,%s,%s,%s\n",
+            (unsigned long long)now,
+            event,
+            msg_type,
+            msg_id);
+
+    fflush(node->log_file);
 }
