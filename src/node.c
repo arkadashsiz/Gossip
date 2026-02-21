@@ -50,6 +50,8 @@ int node_init(node_t *node,
 
 void node_run(node_t *node) {
     pthread_create(&node->listener_thread, NULL, listener_thread_func, node);
+    pthread_create(&node->ping_thread, NULL, ping_thread_func, node);
+
 }
 
 void node_bootstrap(node_t *node, const char *boot_ip, int boot_port) {
@@ -185,10 +187,13 @@ void* listener_thread_func(void* arg) {
             handle_gossip(node, &msg, &sender);
 
         }
+        else if (strcmp(msg.msg_type, "PING") == 0) {
+            handle_ping(node, &msg, &sender);
+        }
+        else if (strcmp(msg.msg_type, "PONG") == 0) {
+            handle_pong(node, &msg, &sender);
+        }
 
-        //
-        // else if PING
-        // else if PONG
         // else if IHAVE
         // else if IWANT
     }
@@ -333,5 +338,128 @@ void node_cleanup(node_t *node) {
     node->running = 0;
     close(node->sockfd);
     pthread_join(node->listener_thread, NULL);
+    pthread_join(node->ping_thread, NULL);
     pthread_mutex_destroy(&node->lock);
+}
+
+
+void* ping_thread_func(void* arg) {
+
+    node_t *node = (node_t*)arg;
+
+    while (node->running) {
+
+        sleep(node->ping_interval);
+
+        struct sockaddr_in targets[MAX_PEERS];
+        int count = membership_get_random(&node->membership,
+                                          targets,
+                                          node->fanout,
+                                          NULL);
+
+        for (int i = 0; i < count; i++) {
+
+            gossip_msg_t ping;
+
+            ping.version = 1;
+
+            snprintf(ping.msg_id, ID_LEN, "PING_%llu",
+                     (unsigned long long)current_time_ms());
+
+            strcpy(ping.msg_type, "PING");
+            strcpy(ping.sender_id, node->node_id);
+            strcpy(ping.sender_addr, node->self_addr);
+
+            ping.timestamp_ms = current_time_ms();
+            ping.ttl = 1;
+
+            snprintf(ping.payload, MSG_BUF_SIZE,
+                     "{ \"ping_id\": \"%s\" }",
+                     ping.msg_id);
+
+            char buffer[MAX_SERIALIZED_LEN];
+            serialize_message(&ping, buffer, MAX_SERIALIZED_LEN);
+
+            sendto(node->sockfd,
+                   buffer,
+                   strlen(buffer),
+                   0,
+                   (struct sockaddr*)&targets[i],
+                   sizeof(struct sockaddr_in));
+        }
+
+        membership_remove_expired(node);
+    }
+
+    return NULL;
+}
+
+void membership_remove_expired(node_t *node) {
+
+    pthread_mutex_lock(&node->membership.lock);
+
+    uint64_t now = current_time_ms();
+
+    for (int i = 0; i < node->membership.count; ) {
+
+        uint64_t last = node->membership.list[i].last_seen;
+
+        if ((now - last) > (uint64_t)(node->peer_timeout * 1000)) {
+
+            printf("[Peer Removed] Timeout\n");
+
+            node->membership.list[i] =
+                node->membership.list[node->membership.count - 1];
+
+            node->membership.count--;
+        }
+        else {
+            i++;
+        }
+    }
+
+    pthread_mutex_unlock(&node->membership.lock);
+}
+
+void handle_ping(node_t *node,
+                 gossip_msg_t *msg,
+                 struct sockaddr_in *sender) {
+
+    membership_add(&node->membership, *sender);
+
+    gossip_msg_t pong;
+
+    pong.version = 1;
+
+    snprintf(pong.msg_id, ID_LEN, "PONG_%llu",
+             (unsigned long long)current_time_ms());
+
+    strcpy(pong.msg_type, "PONG");
+    strcpy(pong.sender_id, node->node_id);
+    strcpy(pong.sender_addr, node->self_addr);
+
+    pong.timestamp_ms = current_time_ms();
+    pong.ttl = 1;
+
+    snprintf(pong.payload, MSG_BUF_SIZE,
+             "{ \"reply_to\": \"%s\" }",
+             msg->msg_id);
+
+    char buffer[MAX_SERIALIZED_LEN];
+    serialize_message(&pong, buffer, MAX_SERIALIZED_LEN);
+
+    sendto(node->sockfd,
+           buffer,
+           strlen(buffer),
+           0,
+           (struct sockaddr*)sender,
+           sizeof(struct sockaddr_in));
+}
+
+
+void handle_pong(node_t *node,
+                 gossip_msg_t *msg,
+                 struct sockaddr_in *sender) {
+
+    membership_add(&node->membership, *sender);
 }

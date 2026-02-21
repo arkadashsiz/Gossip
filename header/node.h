@@ -34,6 +34,7 @@ typedef struct {
 
     pthread_mutex_t lock;
     pthread_t listener_thread;
+    pthread_t ping_thread;
 } node_t;
 
 // Core Node Functions
@@ -52,5 +53,9 @@ void handle_peers_list(node_t *node, gossip_msg_t *msg);
 void handle_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
 void handle_incoming_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
 void relay_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *exclude);
+void* ping_thread_func(void* arg);
+void handle_ping(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
+void handle_pong(node_t *node, gossip_msg_t *msg, struct sockaddr_in *sender);
+void membership_remove_expired(node_t *node);
 
 #endif
