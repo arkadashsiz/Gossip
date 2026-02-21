@@ -5,6 +5,13 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <time.h>
+#include <signal.h>
+node_t *global_node = NULL;
+void handle_signal(int sig) {
+    if (global_node) {
+        global_node->running = 0;
+    }
+}
 
 static struct option long_options[] = {
     {"port", required_argument, 0, 'p'},
@@ -15,7 +22,9 @@ static struct option long_options[] = {
     {"ping-interval", required_argument, 0, 'i'},
     {"peer-timeout", required_argument, 0, 'o'},
     {"seed", required_argument, 0, 's'},
-    {0, 0, 0, 0}
+    {0, 0, 0, 0},
+    {"message", required_argument, 0, 'm'},
+
 };
 
 
@@ -24,6 +33,7 @@ void print_usage() {
 }
 
 int main(int argc, char *argv[]) {
+    char auto_message[MSG_BUF_SIZE] = {0};
 
     node_t node = {0};
 
@@ -34,7 +44,7 @@ int main(int argc, char *argv[]) {
     int peer_timeout = 6;
     unsigned int seed = 42;
     int opt;
-    while ((opt = getopt_long(argc, argv, "p:f:t:b:l:i:o:s:",
+    while ((opt = getopt_long(argc, argv, "p:f:t:b:l:i:o:s:m:",
                               long_options, NULL)) != -1) {
 
         switch (opt) {
@@ -48,6 +58,9 @@ int main(int argc, char *argv[]) {
             case 'i': ping_interval = atoi(optarg); break;
             case 'o': peer_timeout = atoi(optarg); break;
             case 's': seed = (unsigned int)atoi(optarg); break;
+            case 'm':
+                strncpy(auto_message, optarg, MSG_BUF_SIZE - 1);
+                break;
             default:
                 print_usage();
                 return 1;
@@ -79,9 +92,47 @@ int main(int argc, char *argv[]) {
     node_run(&node);
 
     printf("Gossip Node started on port %d\n", port);
-    printf("> ");
+
+node.running = 1;
+global_node = &node;
+signal(SIGINT, handle_signal);
+signal(SIGTERM, handle_signal);
+/* --- Auto-inject message if provided --- */
+if (strlen(auto_message) > 0) {
+
+    gossip_msg_t m;
+
+    m.version = 1;
+
+    snprintf(m.msg_id, ID_LEN, "%s_%llu",
+             node.node_id,
+             (unsigned long long)current_time_ms());
+
+    strcpy(m.msg_type, "GOSSIP");
+
+    strcpy(m.sender_id, node.node_id);
+    strcpy(m.sender_addr, node.self_addr);
+
+    m.timestamp_ms = current_time_ms();
+    m.ttl = node.ttl;
+
+    snprintf(m.payload, MSG_BUF_SIZE,
+             "{ \"topic\": \"news\", \"data\": \"%s\" }",
+             auto_message);
+
+    pthread_mutex_lock(&node.lock);
+    strcpy(node.seen_ids[node.seen_count % MAX_SEEN_MSGS], m.msg_id);
+    node.seen_count++;
+    pthread_mutex_unlock(&node.lock);
+
+    relay_gossip(&node, &m, NULL);
+}
+
+/* --- If running in terminal, allow manual input --- */
+if (isatty(STDIN_FILENO)) {
 
     char input[MSG_BUF_SIZE];
+    printf("> ");
 
     while (fgets(input, MSG_BUF_SIZE, stdin)) {
 
@@ -107,7 +158,6 @@ int main(int argc, char *argv[]) {
                      "{ \"topic\": \"news\", \"data\": \"%s\" }",
                      input + 4);
 
-            // Add to seen set
             pthread_mutex_lock(&node.lock);
             strcpy(node.seen_ids[node.seen_count % MAX_SEEN_MSGS], m.msg_id);
             node.seen_count++;
@@ -118,7 +168,15 @@ int main(int argc, char *argv[]) {
 
         printf("> ");
     }
+}
+else {
+    /* Non-interactive mode (experiment) */
+    while (node.running) {
+        sleep(1);
+    }
+}
 
-    node_cleanup(&node);
-    return 0;
+node_cleanup(&node);
+return 0;
+
 }

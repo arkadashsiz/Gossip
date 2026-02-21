@@ -28,6 +28,9 @@ int node_init(node_t *node,
     node->peer_timeout = peer_timeout;
     node->seed = seed;
     char log_name[64];
+    node->running = 1;
+    node->seen_count = 0;
+
     snprintf(log_name, sizeof(log_name), "node_%d.log", port);
 
     node->log_file = fopen(log_name, "w");
@@ -50,6 +53,8 @@ int node_init(node_t *node,
     serv.sin_family = AF_INET;
     serv.sin_addr.s_addr = INADDR_ANY;
     serv.sin_port = htons(port);
+    int opt = 1;
+    setsockopt(node->sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     if (bind(node->sockfd, (struct sockaddr*)&serv, sizeof(serv)) < 0) return -1;
 
