@@ -1,0 +1,52 @@
+# =========================
+# Build / Compilation
+# =========================
+*.o
+*.out
+*.a
+*.so
+*.exe
+
+# Your compiled binary
+gossip_node
+
+# Make
+Makefile~
+*.d
+
+# =========================
+# Logs
+# =========================
+node_*.log
+*.log
+
+# Experiment output
+experiment_output.txt
+analyze_output.txt
+
+# =========================
+# Temporary files
+# =========================
+*~
+*.swp
+*.swo
+*.tmp
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.code-workspace
+
+
+__pycache__/
+*.pyc
+
+
