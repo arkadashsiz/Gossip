@@ -1,5 +1,4 @@
 import glob
-
 logs = glob.glob("node_*.log")
 
 events = []
