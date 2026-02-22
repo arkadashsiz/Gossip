@@ -7,7 +7,11 @@
 #define NODE_ID_LEN 64
 #define ADDR_STR_LEN 64
 #define MSG_TYPE_LEN 32
-#define MSG_BUF_SIZE 4096
+#define MSG_BUF_SIZE 8192
+
+/* Wire buffer must be large enough for a fully serialized gossip_msg_t.
+   With MSG_BUF_SIZE=8192 and all other fixed fields, ~9 KB is safe. */
+#define MAX_SERIALIZED_LEN 10240
 
 typedef struct {
     int version;
