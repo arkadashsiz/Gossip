@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
+#include <arpa/inet.h>
 
 node_t *global_node = NULL;
 
