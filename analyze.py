@@ -1,184 +1,250 @@
-#!/usr/bin/env python3
-"""
-analyze.py – Parse gossip experiment logs and compute:
-  - Convergence time (time to 95% coverage)
-  - Message overhead (total sent messages up to 95% coverage)
-  - Mean + std-dev across seeds for each (N, mode) combination
+#!/usr/bin/env python
 
-Directory structure expected (produced by experiment.sh):
-  results/
-    push_only/
-      N10/seed42/node_*.log
-      N10/seed123/node_*.log
-      ...
-    hybrid/
-      N10/seed42/node_*.log
-      ...
-
-Each log line: <timestamp_ms>,<event>,<msg_type>,<msg_id>
-"""
 
 import os
 import glob
 import math
+import sys
 from collections import defaultdict
 
-# ----------------------------------------------------------------
-# Config
-# ----------------------------------------------------------------
-RESULTS_DIR = "results"
-TARGET_COVERAGE = 0.95   # 95 %
-MODES = ["push_only", "hybrid"]
-SIZES = [10, 20, 50]
+# ── config ───────────────────────────────────────────────────────────────────
+RESULTS_DIR     = "results"
+TARGET_COVERAGE = 0.95
+EXPECTED_SIZES  = [10, 20, 50]
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ----------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------
 
-def mean(values):
-    if not values:
-        return float("nan")
-    return sum(values) / len(values)
+# ── statistics ────────────────────────────────────────────────────────────────
+def _mean(vals):
+    return sum(vals) / len(vals) if vals else float("nan")
 
-def std(values):
-    if len(values) < 2:
+def _std(vals):
+    if len(vals) < 2:
         return 0.0
-    m = mean(values)
-    return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))
+    m = _mean(vals)
+    return math.sqrt(sum((v - m) ** 2 for v in vals) / (len(vals) - 1))
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def parse_logs(log_dir):
+def _load_dir(log_dir):
     """
-    Read all node_*.log files in log_dir.
-    Returns:
-      events  – list of (timestamp_ms, event, msg_type, msg_id)
-      n_nodes – number of log files found
+    Read all node_*.log files from log_dir.
+    Returns  per_node: dict  port(int) -> [(ts, event, msg_type, msg_id), ...]
     """
-    log_files = glob.glob(os.path.join(log_dir, "node_*.log"))
-    n_nodes = len(log_files)
-    events = []
-    for f in log_files:
-        with open(f) as fh:
+    per_node = {}
+    for path in glob.glob(os.path.join(log_dir, "node_*.log")):
+        try:
+            port = int(os.path.basename(path)
+                         .replace("node_", "").replace(".log", ""))
+        except ValueError:
+            continue
+        rows = []
+        with open(path) as fh:
             for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(",", 3)
-                if len(parts) < 4:
-                    continue
-                ts, event, msg_type, msg_id = parts
-                try:
-                    events.append((int(ts), event, msg_type, msg_id))
-                except ValueError:
-                    pass
-    return events, n_nodes
+                parts = line.strip().split(",", 3)
+                if len(parts) == 4:
+                    try:
+                        rows.append((int(parts[0]), parts[1],
+                                     parts[2], parts[3]))
+                    except ValueError:
+                        pass
+        per_node[port] = rows
+    return per_node
 
 
-def analyze_run(log_dir):
+def _find_injector(per_node):
     """
-    Returns a dict with keys:
-      convergence_ms  – time to 95% gossip coverage (or None)
-      total_sent      – total SEND events up to convergence
-      n_nodes         – cluster size
+    Return (injector_port, msg_id, origin_ts).
+
+    The injector is the node with the globally earliest SEND,GOSSIP
+    timestamp.  Ties are broken by picking the highest port number
+    (injector is always on a high port like 7xxx while cluster starts
+    at 5000).
     """
-    events, n_nodes = parse_logs(log_dir)
-    if not events or n_nodes == 0:
+    best = None   # (ts, port, msg_id)
+    for port, rows in per_node.items():
+        for ts, ev, mt, mid in rows:
+            if ev == "SEND" and mt == "GOSSIP":
+                if (best is None
+                        or ts < best[0]
+                        or (ts == best[0] and port > best[1])):
+                    best = (ts, port, mid)
+                break   # earliest SEND per file is enough for comparison
+    if best is None:
+        return None, None, None
+    return best[1], best[2], best[0]
+
+
+def analyze_run(log_dir, declared_n):
+    """
+    Analyse one seed directory.
+
+    Returns a dict:
+        n_nodes         – number of cluster nodes (logs minus injector)
+        convergence_ms  – ms to 95% coverage, or None
+        total_sent      – total SEND events origin..convergence, or None
+        coverage        – fraction of cluster nodes that got the message
+    or None if the directory has no log files.
+    """
+    per_node = _load_dir(log_dir)
+    if not per_node:
         return None
 
-    # Group GOSSIP events by msg_id
-    gossip_sends    = defaultdict(list)   # msg_id -> [ts, ...]
-    gossip_receives = defaultdict(list)   # msg_id -> [ts, ...]
-    all_sends       = []                  # all SEND timestamps regardless of type
+    injector_port, msg_id, origin_ts = _find_injector(per_node)
+    if msg_id is None:
+        return {"n_nodes": declared_n, "convergence_ms": None,
+                "total_sent": None, "coverage": 0.0}
 
-    for ts, event, msg_type, msg_id in events:
-        if event == "SEND":
-            all_sends.append(ts)
-        if msg_type == "GOSSIP":
-            if event == "SEND":
-                gossip_sends[msg_id].append(ts)
-            elif event == "RECEIVE":
-                gossip_receives[msg_id].append(ts)
+    # Cluster = everything that is NOT the injector
+    cluster_ports = [p for p in per_node if p != injector_port]
+    n_nodes = len(cluster_ports) if cluster_ports else declared_n
 
-    # Find the message with the most coverage
-    best_convergence = None
-    best_overhead    = None
+    # Earliest RECEIVE,GOSSIP timestamp per cluster node for this msg_id
+    receive_times = []
+    for port in cluster_ports:
+        for ts, ev, mt, mid in per_node[port]:
+            if ev == "RECEIVE" and mt == "GOSSIP" and mid == msg_id:
+                receive_times.append(ts)
+                break   # one per node
 
-    for msg_id, receives in gossip_receives.items():
-        sends = gossip_sends.get(msg_id, [])
-        if not sends:
-            continue
+    coverage = len(receive_times) / n_nodes
 
-        origin_ts = min(sends)
-        target    = math.ceil(TARGET_COVERAGE * n_nodes)
-        receives_sorted = sorted(receives)
+    target_count = math.ceil(TARGET_COVERAGE * n_nodes)
+    if len(receive_times) < target_count:
+        return {"n_nodes": n_nodes, "convergence_ms": None,
+                "total_sent": None, "coverage": coverage}
 
-        if len(receives_sorted) >= target:
-            conv_ts  = receives_sorted[target - 1]
-            conv_ms  = conv_ts - origin_ts
+    receive_times.sort()
+    conv_ts = receive_times[target_count - 1]
+    conv_ms = conv_ts - origin_ts
 
-            # Count ALL sent messages (any type) up to conv_ts
-            overhead = sum(1 for ts in all_sends if origin_ts <= ts <= conv_ts)
+    # Overhead = every SEND (any type) across all logs in [origin_ts, conv_ts]
+    total_sent = sum(
+        1
+        for rows in per_node.values()
+        for ts, ev, _, _ in rows
+        if ev == "SEND" and origin_ts <= ts <= conv_ts
+    )
 
-            if best_convergence is None or conv_ms < best_convergence:
-                best_convergence = conv_ms
-                best_overhead    = overhead
-
-    if best_convergence is None:
-        return {"convergence_ms": None, "total_sent": None,
-                "n_nodes": n_nodes}
-
-    return {"convergence_ms": best_convergence,
-            "total_sent":     best_overhead,
-            "n_nodes":        n_nodes}
+    return {"n_nodes": n_nodes, "convergence_ms": conv_ms,
+            "total_sent": total_sent, "coverage": coverage}
 
 
-# ----------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------
+# ── discovery ────────────────────────────────────────────────────────────────
 
-def collect_results():
+def collect_results(results_dir=RESULTS_DIR):
     """
-    Walk results/ and return a nested dict:
-      data[mode][N] = list of {convergence_ms, total_sent}
+    Walk results_dir and return  data[mode][N] = [run_dict, ...]
+    Modes and N values are auto-discovered from the directory tree.
     """
-    data = {mode: {N: [] for N in SIZES} for mode in MODES}
+    if not os.path.isdir(results_dir):
+        print(f"[!] '{results_dir}' not found – run experiment.sh first.")
+        return {}
 
-    for mode in MODES:
-        for N in SIZES:
-            seed_dirs = glob.glob(
-                os.path.join(RESULTS_DIR, mode, f"N{N}", "seed*"))
+    modes = sorted(
+        d for d in os.listdir(results_dir)
+        if os.path.isdir(os.path.join(results_dir, d))
+    )
+    if not modes:
+        print(f"[!] No subdirectories in '{results_dir}'.")
+        return {}
+
+    data = {}
+    for mode in modes:
+        data[mode] = {}
+        mode_dir = os.path.join(results_dir, mode)
+        # Discover N values
+        sizes = []
+        for d in os.listdir(mode_dir):
+            if d.startswith("N"):
+                try:
+                    sizes.append(int(d[1:]))
+                except ValueError:
+                    pass
+        for N in sorted(sizes):
+            seed_dirs = sorted(glob.glob(
+                os.path.join(mode_dir, f"N{N}", "seed*")))
+            runs = []
             for sd in seed_dirs:
-                result = analyze_run(sd)
-                if result and result["convergence_ms"] is not None:
-                    data[mode][N].append(result)
+                result = analyze_run(sd, N)
+                if result is None:
+                    print(f"  [warn] no logs in {sd}")
+                    continue
+                result["seed"] = os.path.basename(sd)
+                runs.append(result)
+            data[mode][N] = runs
 
     return data
 
 
+# ── reporting ─────────────────────────────────────────────────────────────────
+
 def print_table(data):
-    print("\n" + "=" * 72)
-    print(f"{'Mode':<12} {'N':>4}  {'Seeds':>5}  "
-          f"{'Conv(ms) mean':>14} {'±std':>8}  "
-          f"{'Overhead mean':>14} {'±std':>8}")
-    print("-" * 72)
+    if not data:
+        return
+    sep = "─" * 80
+    print()
+    print(sep)
+    print(f"{'Mode':<14} {'N':>4}  {'Runs':>4}  "
+          f"{'Conv mean(ms)':>14} {'±std':>7}  "
+          f"{'Overhead mean':>14} {'±std':>7}  "
+          f"{'Avg cov':>8}")
+    print(sep)
 
-    for mode in MODES:
-        for N in SIZES:
+    for mode in sorted(data):
+        first_row = True
+        for N in sorted(data[mode]):
             runs = data[mode][N]
-            conv_vals = [r["convergence_ms"] for r in runs
-                         if r["convergence_ms"] is not None]
-            over_vals = [r["total_sent"] for r in runs
-                         if r["total_sent"] is not None]
+            cv = [r["convergence_ms"] for r in runs if r["convergence_ms"] is not None]
+            ov = [r["total_sent"]     for r in runs if r["total_sent"]     is not None]
+            covv = [r["coverage"]     for r in runs]
 
-            c_mean = mean(conv_vals) if conv_vals else float("nan")
-            c_std  = std(conv_vals)  if conv_vals else float("nan")
-            o_mean = mean(over_vals) if over_vals else float("nan")
-            o_std  = std(over_vals)  if over_vals else float("nan")
+            def f(v):
+                return f"{v:>10.1f}" if not math.isnan(v) else "       n/a"
 
-            print(f"{mode:<12} {N:>4}  {len(conv_vals):>5}  "
-                  f"{c_mean:>14.1f} {c_std:>8.1f}  "
-                  f"{o_mean:>14.1f} {o_std:>8.1f}")
+            mode_col = mode if first_row else ""
+            first_row = False
+            print(f"{mode_col:<14} {N:>4}  {len(runs):>4}  "
+                  f"{f(_mean(cv))} {f(_std(cv))}  "
+                  f"{f(_mean(ov))} {f(_std(ov))}  "
+                  f"{_mean(covv)*100:>7.1f}%")
+
+            # Flag any seed that didn't converge
+            for r in runs:
+                if r["convergence_ms"] is None:
+                    pct = r["coverage"] * 100
+                    print(f"    [{r['seed']}]  did not reach "
+                          f"{TARGET_COVERAGE*100:.0f}%  "
+                          f"(coverage = {pct:.0f}%  "
+                          f"nodes = {r['n_nodes']})")
         print()
+
+    print(sep)
+
+
+def print_comparison(data):
+    """Side-by-side push vs hybrid summary (only if both modes present)."""
+    if "push_only" not in data or "hybrid" not in data:
+        return
+    common = sorted(set(data["push_only"]) & set(data["hybrid"]))
+    if not common:
+        return
+
+    print("\n── Push-only vs Hybrid ──────────────────────────────────────────────")
+    print(f"{'N':>4}   {'Push conv':>18}   {'Hybrid conv':>18}   "
+          f"{'Push OH':>16}   {'Hybrid OH':>16}")
+    print("─" * 80)
+    for N in common:
+        def s(mode, key):
+            vals = [r[key] for r in data[mode][N] if r[key] is not None]
+            if not vals:
+                return "     n/a"
+            return f"{_mean(vals):>7.1f}±{_std(vals):<6.1f}"
+        print(f"{N:>4}   {s('push_only','convergence_ms'):>18}   "
+              f"{s('hybrid','convergence_ms'):>18}   "
+              f"{s('push_only','total_sent'):>16}   "
+              f"{s('hybrid','total_sent'):>16}")
+    print()
 
 
 def make_plots(data):
@@ -189,62 +255,62 @@ def make_plots(data):
     except ImportError:
         print("[!] matplotlib not installed – skipping plots.")
         return
+    if not data:
+        return
 
-    colors = {"push_only": "#e74c3c", "hybrid": "#2980b9"}
-    labels = {"push_only": "Push-only", "hybrid": "Hybrid Push-Pull"}
+    palette    = ["#e74c3c", "#2980b9", "#27ae60", "#8e44ad"]
+    markers    = ["o", "s", "^", "D"]
+    label_map  = {"push_only": "Push-only", "hybrid": "Hybrid Push-Pull"}
+    all_modes  = sorted(data.keys())
+    cmap       = {m: palette[i % len(palette)] for i, m in enumerate(all_modes)}
+    mmap       = {m: markers[i % len(markers)] for i, m in enumerate(all_modes)}
 
-    # ---- Convergence plot ----
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(14, 5))
 
-    for mode in MODES:
-        ns, means_, stds_ = [], [], []
-        for N in SIZES:
-            runs = data[mode][N]
-            vals = [r["convergence_ms"] for r in runs
-                    if r["convergence_ms"] is not None]
-            if vals:
+    for mode in all_modes:
+        ns, cm, cs, om, os_ = [], [], [], [], []
+        for N in sorted(data[mode]):
+            cv = [r["convergence_ms"] for r in data[mode][N]
+                  if r["convergence_ms"] is not None]
+            ov = [r["total_sent"]     for r in data[mode][N]
+                  if r["total_sent"]  is not None]
+            if cv:
                 ns.append(N)
-                means_.append(mean(vals))
-                stds_.append(std(vals))
+                cm.append(_mean(cv));  cs.append(_std(cv))
+                om.append(_mean(ov) if ov else float("nan"))
+                os_.append(_std(ov) if len(ov) > 1 else 0.0)
 
-        axes[0].errorbar(ns, means_, yerr=stds_, marker="o",
-                         label=labels[mode], color=colors[mode],
-                         capsize=4, linewidth=2)
+        lbl = label_map.get(mode, mode)
+        kw  = dict(color=cmap[mode], marker=mmap[mode],
+                   capsize=4, linewidth=2, label=lbl)
+        if ns:
+            ax0.errorbar(ns, cm, yerr=cs,  **kw)
+            ax1.errorbar(ns, om, yerr=os_, **kw)
 
-    axes[0].set_xlabel("Number of Nodes (N)")
-    axes[0].set_ylabel("Convergence Time (ms)")
-    axes[0].set_title("95% Convergence Time vs Network Size")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-
-    # ---- Overhead plot ----
-    for mode in MODES:
-        ns, means_, stds_ = [], [], []
-        for N in SIZES:
-            runs = data[mode][N]
-            vals = [r["total_sent"] for r in runs
-                    if r["total_sent"] is not None]
-            if vals:
-                ns.append(N)
-                means_.append(mean(vals))
-                stds_.append(std(vals))
-
-        axes[1].errorbar(ns, means_, yerr=stds_, marker="s",
-                         label=labels[mode], color=colors[mode],
-                         capsize=4, linewidth=2)
-
-    axes[1].set_xlabel("Number of Nodes (N)")
-    axes[1].set_ylabel("Total Messages Sent")
-    axes[1].set_title("Message Overhead vs Network Size")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+    for ax, title, ylabel in [
+        (ax0, "95% Convergence Time vs N", "Convergence time (ms)"),
+        (ax1, "Message Overhead vs N",     "Total messages sent"),
+    ]:
+        ax.set_title(title, fontsize=12)
+        ax.set_xlabel("Number of nodes (N)")
+        ax.set_ylabel(ylabel)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        # Only set fixed ticks if we have data for those sizes
+        all_ns = sorted({N for md in data.values() for N in md})
+        if all_ns:
+            ax.set_xticks(all_ns)
 
     plt.tight_layout()
-    plt.savefig("experiment_results.png", dpi=150)
-    print("\n[+] Plot saved to experiment_results.png")
+    out = "experiment_results.png"
+    plt.savefig(out, dpi=150)
+    print(f"\n[+] Plot saved → {out}")
 
 
+# ── main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    data = collect_results()
+    rdir = sys.argv[1] if len(sys.argv) > 1 else RESULTS_DIR
+    data = collect_results(rdir)
     print_table(data)
+    print_comparison(data)
     make_plots(data)
