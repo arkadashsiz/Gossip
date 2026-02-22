@@ -161,6 +161,10 @@ int node_init(node_t *node,
     int opt = 1;
     setsockopt(node->sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    /* Wake up recvfrom every 500 ms so the listener thread can check running */
+    struct timeval tv = {0, 500000};
+    setsockopt(node->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
     if (bind(node->sockfd, (struct sockaddr *)&serv, sizeof(serv)) < 0) {
         perror("bind"); return -1;
     }

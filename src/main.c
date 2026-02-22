@@ -12,7 +12,11 @@ node_t *global_node = NULL;
 
 void handle_signal(int sig) {
     (void)sig;
-    if (global_node) global_node->running = 0;
+    if (global_node) {
+        global_node->running = 0;
+        /* Unblock fgets() in the interactive loop by closing stdin */
+        fclose(stdin);
+    }
 }
 
 static struct option long_options[] = {
@@ -150,8 +154,12 @@ int main(int argc, char *argv[]) {
         relay_gossip(&node, &m, NULL);
     }
 
-    /* --- Interactive or non-interactive mode --- */
-    if (isatty(STDIN_FILENO)) {
+    /* --- Interactive or non-interactive mode ---
+     * We treat the node as interactive only if stdin is a tty AND
+     * no -m flag was given (experiment/injector nodes are non-interactive).
+     * Background processes launched by experiment.sh have stdin redirected
+     * to /dev/null by the script, so isatty() returns 0 for them.       */
+    if (isatty(STDIN_FILENO) && strlen(auto_message) == 0) {
         char input[MSG_BUF_SIZE];
         printf("> ");
         fflush(stdout);
@@ -213,8 +221,13 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
         }
     } else {
-        /* Non-interactive (experiment) */
-        while (node.running) sleep(1);
+        /* Non-interactive (experiment node or injector with -m flag).
+         * sleep(1) is interrupted by SIGTERM on Linux, but we use a
+         * short loop to be safe. */
+        while (node.running) {
+            struct timespec ts = {0, 100000000L}; /* 100 ms */
+            nanosleep(&ts, NULL);
+        }
     }
 
     node_cleanup(&node);
