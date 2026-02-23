@@ -13,7 +13,7 @@ gossip_node
 # Make
 Makefile~
 *.d
-
+final_files
 # =========================
 # Logs
 # =========================
