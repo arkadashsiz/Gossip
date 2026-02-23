@@ -57,9 +57,6 @@ static stored_gossip_t *find_stored(node_t *node, const char *msg_id) {
     return NULL;
 }
 
-/* =========================================================
- * PoW helpers
- * ========================================================= */
 
 int node_build_hello_payload(node_t *node, char *payload_buf, size_t buf_size) {
     if (node->pow_difficulty <= 0) {
@@ -109,9 +106,6 @@ void mark_seen_public(node_t *node, const char *msg_id) {
     mark_seen(node, msg_id);
 }
 
-/* =========================================================
- * Node Init / Run / Cleanup
- * ========================================================= */
 
 int node_init(node_t *node,
               int port, int fanout, int ttl, int peer_limit,
@@ -227,9 +221,6 @@ void node_cleanup(node_t *node) {
     if (node->log_file) fclose(node->log_file);
 }
 
-/* =========================================================
- * Gossip relay
- * ========================================================= */
 
 void relay_gossip(node_t *node, gossip_msg_t *msg, struct sockaddr_in *exclude) {
     if (msg->ttl <= 0) return;
